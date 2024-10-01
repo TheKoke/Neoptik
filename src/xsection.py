@@ -1,6 +1,5 @@
 import numpy
-import matplotlib.pyplot as plt
-
+import multiprocessing
 
 from chi import Chi_Square
 from nuclear import Nuclei
@@ -104,23 +103,50 @@ class Elastic:
         `angles, xsections` : `tuple[numpy.ndarray, numpy.ndarray]`
             Elastic cross-section. Angles in degrees, xsections in mb/sr.
         '''
+        THREADS = lmax + 1
 
         angles = numpy.linspace(theta0, thetan, int((thetan - theta0) / dtheta) + 1)
         amplitudes = numpy.zeros_like(angles, dtype=numpy.complex128)
 
-        for i in range(lmax + 1):
-            effective_potential = self.partial_wave_potential(i)
-
-            solutions = self.radial_solutions(effective_potential, 2.0 * i * dr, rmax, dr)
-            r1, r2 = self.outward_radiuses()
-
-            smatrix = self.smatrix(r1, r2, solutions, i)
-            amplitudes += self.scattering_amplitude(angles, smatrix, i)
+        with multiprocessing.Pool(THREADS) as pool:
+            results = pool.starmap(self.partial_wave_amplitude, [(angles, i, rmax, dr) for i in range(THREADS)])
 
         amplitudes += self.coulomb_amplitude(angles)
+        amplitudes += sum([fl for fl in results])
         cross = (amplitudes * amplitudes.conj()).real
 
         return angles, cross
+    
+    def partial_wave_amplitude(self, angles: numpy.ndarray, l: int, rmax: int, dr: float) -> numpy.ndarray:
+        '''
+        Method that calculates certain partial wave amplitude - `fl`
+
+        Params
+        ------
+        `angles` : `numpy.ndarray[float]`
+            Angles amplitude calculates for, deg.
+
+        `l` : `int`
+            Partial wave number.
+
+        `rmax` : `float`
+            Maximal radius for integration, fm.
+
+        `dr` : `float`
+            Integration step size, fm.
+
+        Returns
+        -------
+        `fl` : `numpy.ndarray[complex]`
+            Certain partial wave amplitude, (mb/sr)^(1/2).
+        '''
+        centrifugal_potential = self.partial_wave_potential(l)
+        solutions = self.radial_solutions(centrifugal_potential, 2.0 * l * dr, rmax, dr)
+
+        r1, r2 = self.outward_radiuses()
+        dl = self.phase_shift(r1, r2, solutions, l)
+
+        return self.scattering_amplitude(angles, dl, l)
 
     def partial_wave_potential(self, l: int):
         '''
@@ -157,7 +183,7 @@ class Elastic:
 
         Returns
         --------
-        `radials` : `tuple[numpy.ndarray, numpy.ndarray]`
+        `radials` : `tuple[numpy.ndarray[complex], numpy.ndarray[complex]]`
             Solution of Schrodinger eq. 
         '''
         return Numerov(potential, rmin, rmax, dr).solve()
@@ -171,9 +197,9 @@ class Elastic:
         `radiuses` : `tuple[float, float]`
             Matching outward radiuses in fermi.
         '''
-        return (19, 25) # TODO: brute-force, fix and try to automatize.
+        return (39.8, 40) # TODO: brute-force, fix and try to automatize.
 
-    def smatrix(self, r1: float, r2: float, solutions: tuple[numpy.ndarray, numpy.ndarray], l: int) -> complex:
+    def phase_shift(self, r1: float, r2: float, solutions: tuple[numpy.ndarray, numpy.ndarray], l: int) -> complex:
         '''
         Params
         ------
@@ -183,7 +209,7 @@ class Elastic:
         `r2` : `float`
             Second outward radius, fm.
 
-        `solutions` : `tuple[numpy.ndarray, numpy.ndarray]`
+        `solutions` : `tuple[numpy.ndarray[complex], numpy.ndarray[complex]]`
             Solution of Schrodinger equation.
 
         `l` : `int`
@@ -191,8 +217,8 @@ class Elastic:
 
         Returns
         -------
-        `S` : `complex`
-            Scattering matrix, dimensionless.
+        `dl` : `complex`
+            Phase shift of certain partial wave, dimensionless.
         '''
         xl1 = solutions[1][(numpy.abs(solutions[0] - r1)).argmin()]
         xl2 = solutions[1][(numpy.abs(solutions[0] - r2)).argmin()]
@@ -205,13 +231,12 @@ class Elastic:
         denumerator = kmatrix * nl(self.wavenumber * r2) - nl(self.wavenumber * r1)
 
         return numpy.arctan(numerator / denumerator)
-        
     
     def scattering_amplitude(self, thetas: numpy.ndarray, phase_shift: complex, l: int) -> complex:
         '''
         Params
         ------
-        `thetas` : `numpy.ndarray`
+        `thetas` : `numpy.ndarray[float]`
             Angles to calculate amplitude, deg.
 
         `phase_shift` : `complex`
@@ -222,19 +247,25 @@ class Elastic:
 
         Returns
         -------
-        `f` : `complex`
-            Scattering amplitude of wave.
+        `f` : `numpy.ndarray[complex]`
+            Scattering amplitude of cetain partial wave, (mb/sr)^(1/2).
         '''
         radians = thetas * numpy.pi / 180
         legendre = Legendre(l)
 
-        return 1 / (self.wavenumber) * (2 * l + 1) * legendre(numpy.cos(radians)) \
-            * numpy.exp(complex(0, phase_shift)) * numpy.sin(phase_shift)
+        return 1 / (self.wavenumber) * (2 * l + 1) * legendre(numpy.cos(radians)) * numpy.exp(complex(0, phase_shift)) * numpy.sin(phase_shift)
     
-    def coulomb_amplitude(self, thetas: numpy.ndarray) -> float:
+    def coulomb_amplitude(self, thetas: numpy.ndarray) -> numpy.ndarray:
         '''
+        Params
+        ------
+        `thetas` : `numpy.ndarray`
+            Angles coulomb amplitude calculates to, deg.
+
         Returns
         -------
+        `fc` : `numpy.ndarray[float]`
+            Coulomb scattering amplitude, (mb/sr)^(1/2)
         '''
         radians = thetas * numpy.pi / 180
         reduced_planck = 6.582e-22 # MeV * s
@@ -255,13 +286,13 @@ class Elastic:
         '''
         Params
         ------
-        `theory` : `numpy.ndarray`
+        `theory` : `numpy.ndarray[float]`
             Theoretical calculated cross-sections, mb/sr.
 
-        `experimenthal` : `numpy.ndarray`
+        `experimenthal` : `numpy.ndarray[float]`
             Experimenthal measured cross-sections, mb/sr.
         
-        `uncertainty` : `numpy.ndarray`
+        `uncertainty` : `numpy.ndarray[float]`
             Uncertatinty of experimenthal cross-sections, dimensionless.
 
         Returns
@@ -273,9 +304,11 @@ class Elastic:
 
 
 if __name__ == '__main__':
+    import matplotlib.pyplot as plt
+
     beam = Nuclei(1, 2)
     target = Nuclei(6, 13)
-    E_lab = 18
+    E_lab = 14.5
 
     Vd = 99.03; rv = 1.20; av = 0.755
     Ws = 20.96; rw = 1.31; aw = 0.645
@@ -287,18 +320,27 @@ if __name__ == '__main__':
 
     elastic = Elastic(opt, E_lab)
     
-    angles, cross = elastic.xsections(2, 90, 2, lmax=10)
+    angles, cross = elastic.xsections(2, 180, 2, lmax=4, rmax=50)
 
     with open('src/exp.txt', 'r') as file:
         buffer = file.read().split('\n')
 
-    ang, xs = [], []
+    exp_ang, exp_xs = [], []
     for line in buffer:
-        ang.append(float(line.split(' ')[0]))
-        xs.append(float(line.split(' ')[1]))
+        exp_ang.append(float(line.split(' ')[0]))
+        exp_xs.append(float(line.split(' ')[1]))
+    
+    with open('src/thr.txt', 'r') as file:
+        buffer = file.read().split('\n')
 
-    plt.plot(angles, cross)
-    plt.scatter(ang, xs)
+    thr_ang, thr_xs = [], []
+    for line in buffer:
+        thr_ang.append(float(line.split(' ')[0]))
+        thr_xs.append(float(line.split(' ')[1]))
+
+    plt.plot(angles, cross, color='blue')
+    plt.plot(thr_ang, thr_xs, color='red')
+    plt.scatter(exp_ang, exp_xs, color='blue')
 
     plt.yscale('log')
     plt.grid()
