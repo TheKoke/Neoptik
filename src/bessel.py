@@ -6,6 +6,10 @@ def factorial(n: int) -> int:
     return numpy.arange(1, n + 1).prod()
 
 
+def arg_gamma(z: complex) -> float:
+    return numpy.angle(gamma_function(z))
+
+
 def gamma_function(z: complex) -> complex:
     lanczos_parameter = 7
     lanczos_coeffs = [
@@ -44,30 +48,10 @@ class BesselJ:
         self._n = order
 
     def __call__(self, x: float | complex) -> float | complex:
-        if self._n < 0:
-            return (-1) ** (-self._n) * BesselJ(-self._n)(x)
-
         a = 0; b = numpy.pi
         func = lambda theta: numpy.cos(x * numpy.sin(theta) - self._n * theta)
 
         return 1 / numpy.pi * Simpson.take_integral(func, a, b)
-    
-
-class BesselY:
-    def __init__(self, order: int) -> None:
-        self._n = order
-
-    def __call__(self, x: float | complex) -> float | complex:
-        if self._n < 0:
-            return (-1) ** (-self._n) * BesselY(-self._n)
-        
-        a1 = 0; b1 = numpy.pi
-        func1 = lambda theta: numpy.sin(x * numpy.sin(theta) - self._n * theta)
-
-        a2 = 0; b2 = 20 # Experiment-known boundary
-        func2 = lambda t: (numpy.exp(self._n * t) + (-1) ** self._n * numpy.exp(-self._n * t)) * numpy.exp(-x * numpy.sinh(t))
-
-        return 1 / numpy.pi * (Simpson.take_integral(func1, a1, b1) - Simpson.take_integral(func2, a2, b2))
     
 
 class SphericalBesselJ:
@@ -83,7 +67,17 @@ class SphericalBesselY:
         self._n = order
 
     def __call__(self, x: float | complex) -> float | complex:
-        return numpy.sqrt(numpy.pi / (2 * x)) * BesselY(self._n + 1 / 2)(x)
+        return (-1) ** (self._n + 1) * numpy.sqrt(numpy.pi / (2 * x)) * BesselJ(-self._n - 1 / 2)(x)
+    
+
+class Hankel:
+    def __init__(self, order: int, w: bool) -> None:
+        self._n = order
+        self._w = w
+
+    def __call__(self, x: float | complex) -> complex:
+        return SphericalBesselY(self._n)(x) + complex(0, SphericalBesselJ(self._n)(x)) if self._w \
+            else SphericalBesselY(self._n)(x) - complex(0, SphericalBesselJ(self._n)(x))
 
 
 if __name__ == '__main__':

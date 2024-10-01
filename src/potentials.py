@@ -171,7 +171,7 @@ class WSVolume(Potential):
             else self._R * (numpy.cbrt(self._target.nuclons) + numpy.cbrt(self._beam.nuclons))
 
         value = self._V / (1 + numpy.exp((r - r_int) / self._a))
-        return value if not self._is_imag else complex(0, value)
+        return value if not self._is_imag else 1j * value
     
     def volume_integral(self) -> float:
         """
@@ -247,7 +247,7 @@ class WSSurface(Potential):
             else self._R * (numpy.cbrt(self._target.nuclons) + numpy.cbrt(self._beam.nuclons))
 
         value = 4 * self._V * numpy.exp((r - r_int) / self._a) / (1 + numpy.exp((r - r_int) / self._a)) ** 2
-        return value if not self._is_imag else complex(0, value)
+        return value if not self._is_imag else 1j * value
     
     def volume_integral(self) -> float:
         """
@@ -355,7 +355,7 @@ class Optical:
         self._potentials: list[Potential] = []
 
     def __call__(self, r: float) -> float:
-        return sum(-pot.function(r) for pot in self._potentials)
+        return sum(pot.function(r) for pot in self._potentials)
 
     @property
     def beam(self) -> Nuclei:
@@ -366,24 +366,24 @@ class Optical:
         return self._target
 
     def add_real_volume(self, V: float, r: float, a: float) -> bool:
-        params = WSParameters(V, r, a)
+        params = WSParameters(-V, r, a)
         self._potentials.append(WSVolume(self._beam, self._target, params))
 
     def add_real_surface(self, V: float, r: float, a: float) -> bool:
-        params = WSParameters(V, r, a)
+        params = WSParameters(-V, r, a)
         self._potentials.append(WSSurface(self._beam, self._target, params))
 
     def add_imag_volume(self, W: float, r: float, a: float) -> bool:
-        params = WSParameters(W, r, a)
+        params = WSParameters(-W, r, a)
         self._potentials.append(WSVolume(self._beam, self._target, params, is_imag=True))
 
     def add_imag_surface(self, W: float, r: float, a: float) -> bool:
-        params = WSParameters(W, r, a)
+        params = WSParameters(-W, r, a)
         self._potentials.append(WSSurface(self._beam, self._target, params, is_imag=True))
 
     def add_spin_orbit(self, V: float, W: float, r: float, a: float, s: float, i: int) -> bool:
-        realparams = WSParameters(V, r, a)
-        imagparams = WSParameters(W, r, a)
+        realparams = WSParameters(-V, r, a)
+        imagparams = WSParameters(-W, r, a)
         self._potentials.append(SpinOrbit(self._beam, self._target, realparams, imagparams))
 
     def add_coulomb(self, rc: float) -> bool:
@@ -391,15 +391,4 @@ class Optical:
 
 
 if __name__ == '__main__':
-    beam = Nuclei(1, 2)
-    target = Nuclei(1, 2)
-    params = WSParameters(20.96, 1.31, 0.645)
-    w = WSSurface(beam, target, params, is_imag=True)
-
-    import matplotlib.pyplot as plt
-
-    rs = numpy.linspace(0, 20, 150)
-    values = [-w.function(r).imag for r in rs]
-
-    plt.plot(rs, values)
-    plt.show()
+    pass
