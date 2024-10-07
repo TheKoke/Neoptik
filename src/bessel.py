@@ -68,16 +68,38 @@ class SphericalBesselY:
 
     def __call__(self, x: float | complex) -> float | complex:
         return (-1) ** (self._n + 1) * numpy.sqrt(numpy.pi / (2 * x)) * BesselJ(-self._n - 1 / 2)(x)
-    
 
-class Hankel:
-    def __init__(self, order: int, w: bool) -> None:
+
+class RecurrenceJL:
+    def __init__(self, order: int) -> None:
         self._n = order
-        self._w = w
+        self._participants: list[float] = []
 
-    def __call__(self, x: float | complex) -> complex:
-        return SphericalBesselY(self._n)(x) + complex(0, SphericalBesselJ(self._n)(x)) if self._w \
-            else SphericalBesselY(self._n)(x) - complex(0, SphericalBesselJ(self._n)(x))
+    def __call__(self, x: float | complex) -> float | complex:
+        self._participants.append(numpy.cos(x) / x)
+        self._participants.append(numpy.sin(x) / x)
+
+        for i in range(2, self._n):
+            current = self._participants[i - 1] * (2 * i + 1) / x - participants[i - 2]
+            self._participants.append(current)
+
+        return self._participants[-1]
+
+
+class RecurrenceYl:
+    def __init__(self, order: int) -> None:
+        self._n = order
+        self._participants: list[float] = []
+
+    def __call__(self, x: float | complex) -> float | complex:
+        self._participants.append(numpy.sin(x) / x)
+        self._participants.append(-numpy.cos(x) / x)
+
+        for i in range(2, self._n):
+            current = self._participants[i - 1] * (2 * i + 1) / x - participants[i - 2]
+            self._participants.append(current)
+
+        return self._participants[-1]
 
 
 if __name__ == '__main__':
