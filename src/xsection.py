@@ -6,7 +6,7 @@ from nuclear import Nuclei
 from numerov import Numerov
 from legendre import Legendre
 from potentials import Optical
-from bessel import SphericalBesselJ, SphericalBesselY, arg_gamma
+from couloumb import CoulombWaveFunction, arg_gamma
 
 
 class Elastic:
@@ -106,10 +106,13 @@ class Elastic:
         THREADS = lmax + 1
 
         angles = numpy.linspace(theta0, thetan, int((thetan - theta0) / dtheta) + 1)
-        amplitudes = numpy.zeros_like(angles, dtype=numpy.complex128)
+        amplitudes = numpy.zeros_like(angles, dtype=numpy.complex64)
 
-        with multiprocessing.Pool(THREADS) as pool:
-            results = pool.starmap(self.partial_wave_amplitude, [(angles, i, rmax, dr) for i in range(THREADS)])
+        # with multiprocessing.Pool(THREADS) as pool:
+        #     results = pool.starmap(self.partial_wave_amplitude, [(angles, i, rmax, dr) for i in range(THREADS)])
+        results = []
+        for i in range(lmax + 1):
+            results.append(self.partial_wave_amplitude(angles, i, rmax, dr))
 
         amplitudes += self.coulomb_amplitude(angles)
         amplitudes += sum([fl for fl in results])
@@ -141,12 +144,12 @@ class Elastic:
             Certain partial wave amplitude, (mb/sr)^(1/2).
         '''
         centrifugal_potential = self.partial_wave_potential(l)
-        solutions = self.radial_solutions(centrifugal_potential, 2.0 * l * dr, rmax, dr)
+        solutions = self.radial_solutions(centrifugal_potential, 2.0 * l * dr + 0.001, rmax, dr)
 
         r1, r2 = self.outward_radiuses()
-        dl = self.phase_shift(r1, r2, solutions, l)
+        smatrix = self.smatrix(r1, r2, solutions, l)
 
-        return self.scattering_amplitude(angles, dl, l)
+        return self.scattering_amplitude(angles, smatrix, l)
 
     def partial_wave_potential(self, l: int):
         '''
@@ -167,7 +170,7 @@ class Elastic:
         mu = self._beam.mass() * self._target.mass() / (self._beam.mass() + self._target.mass()) # MeV
         center_mass_energy = self._energy * (1 - self._beam.mass() / (self._beam.mass() + self._target.mass())) # MeV
 
-        return lambda r: l * (l + 1) / (r ** 2) + 2 * mu / (h_bar ** 2 * c ** 2) * (center_mass_energy - self._potential(r))
+        return lambda r: l * (l + 1) / (r ** 2) + 2 * mu / (h_bar ** 2 * c ** 2) * (self.potential(r) - center_mass_energy)
     
     def radial_solutions(self, potential, rmin: float, rmax: float, dr: float) -> tuple[numpy.ndarray, numpy.ndarray]:
         '''
@@ -197,9 +200,9 @@ class Elastic:
         `radiuses` : `tuple[float, float]`
             Matching outward radiuses in fermi.
         '''
-        return (39.8, 40) # TODO: brute-force, fix and try to automatize.
+        return (27, 30) # TODO: brute-force, fix and try to automatize.
 
-    def phase_shift(self, r1: float, r2: float, solutions: tuple[numpy.ndarray, numpy.ndarray], l: int) -> complex:
+    def smatrix(self, r1: float, r2: float, solutions: tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray], l: int) -> complex:
         '''
         Params
         ------
@@ -222,17 +225,16 @@ class Elastic:
         '''
         xl1 = solutions[1][(numpy.abs(solutions[0] - r1)).argmin()]
         xl2 = solutions[1][(numpy.abs(solutions[0] - r2)).argmin()]
-        kmatrix = (r2 * xl1) / (r1 * xl2)
 
-        jl = SphericalBesselJ(l)
-        nl = SphericalBesselY(l)
+        hminus = CoulombWaveFunction(l, False)
+        hplus = CoulombWaveFunction(l, True)
 
-        numerator = kmatrix * jl(self.wavenumber * r2) - jl(self.wavenumber * r1)
-        denumerator = kmatrix * nl(self.wavenumber * r2) - nl(self.wavenumber * r1)
+        relation = xl1 / xl2
+        smatrix = (relation * hminus(0, r2) - hminus(0, r1)) / (relation * hplus(0, r2) - hminus(0, r1))
 
-        return numpy.arctan(numerator / denumerator)
+        return complex(smatrix)
     
-    def scattering_amplitude(self, thetas: numpy.ndarray, phase_shift: complex, l: int) -> complex:
+    def scattering_amplitude(self, thetas: numpy.ndarray, smatrix: complex, l: int) -> complex:
         '''
         Params
         ------
@@ -253,7 +255,7 @@ class Elastic:
         radians = thetas * numpy.pi / 180
         legendre = Legendre(l)
 
-        return 1 / (self.wavenumber) * (2 * l + 1) * legendre(numpy.cos(radians)) * numpy.exp(complex(0, phase_shift)) * numpy.sin(phase_shift)
+        return 1 / (self.wavenumber) * (2 * l + 1) * legendre(numpy.cos(radians)) * (smatrix - 1)
     
     def coulomb_amplitude(self, thetas: numpy.ndarray) -> numpy.ndarray:
         '''
@@ -308,7 +310,7 @@ if __name__ == '__main__':
 
     beam = Nuclei(1, 2)
     target = Nuclei(6, 13)
-    E_lab = 14.5
+    E_lab = 18
 
     Vd = 99.03; rv = 1.20; av = 0.755
     Ws = 20.96; rw = 1.31; aw = 0.645
@@ -320,7 +322,7 @@ if __name__ == '__main__':
 
     elastic = Elastic(opt, E_lab)
     
-    angles, cross = elastic.xsections(2, 180, 2, lmax=4, rmax=50)
+    angles, cross = elastic.xsections(2, 180, 0.5)
 
     with open('src/exp.txt', 'r') as file:
         buffer = file.read().split('\n')
@@ -330,16 +332,16 @@ if __name__ == '__main__':
         exp_ang.append(float(line.split(' ')[0]))
         exp_xs.append(float(line.split(' ')[1]))
     
-    with open('src/thr.txt', 'r') as file:
-        buffer = file.read().split('\n')
+    # with open('src/thr.txt', 'r') as file:
+    #     buffer = file.read().split('\n')
 
-    thr_ang, thr_xs = [], []
-    for line in buffer:
-        thr_ang.append(float(line.split(' ')[0]))
-        thr_xs.append(float(line.split(' ')[1]))
+    # thr_ang, thr_xs = [], []
+    # for line in buffer:
+    #     thr_ang.append(float(line.split(' ')[0]))
+    #     thr_xs.append(float(line.split(' ')[1]))
 
     plt.plot(angles, cross, color='blue')
-    plt.plot(thr_ang, thr_xs, color='red')
+    # plt.plot(thr_ang, thr_xs, color='red')
     plt.scatter(exp_ang, exp_xs, color='blue')
 
     plt.yscale('log')
