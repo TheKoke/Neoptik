@@ -1,12 +1,12 @@
 import numpy
 import multiprocessing
 
-from chi import Chi_Square
 from nuclear import Nuclei
-from numerov import Numerov
-from legendre import Legendre
 from potentials import Optical
-from couloumb import CoulombWaveFunction, arg_gamma
+from mathematics.chi import Chi_Square
+from mathematics.numerov import Numerov
+from mathematics.legendre import Legendre
+from mathematics.couloumb import CoulombWaveFunction
 
 
 class Elastic:
@@ -108,15 +108,15 @@ class Elastic:
         angles = numpy.linspace(theta0, thetan, int((thetan - theta0) / dtheta) + 1)
         amplitudes = numpy.zeros_like(angles, dtype=numpy.complex64)
 
+        results = []
         # with multiprocessing.Pool(THREADS) as pool:
         #     results = pool.starmap(self.partial_wave_amplitude, [(angles, i, rmax, dr) for i in range(THREADS)])
-        results = []
         for i in range(lmax + 1):
             results.append(self.partial_wave_amplitude(angles, i, rmax, dr))
 
-        amplitudes += self.coulomb_amplitude(angles)
         amplitudes += sum([fl for fl in results])
-        cross = (amplitudes * amplitudes.conj()).real
+        cross = self.coulomb_cross_section(angles)
+        cross += (amplitudes * amplitudes.conj()).real
 
         return angles, cross
     
@@ -229,8 +229,17 @@ class Elastic:
         hminus = CoulombWaveFunction(l, False)
         hplus = CoulombWaveFunction(l, True)
 
+        fine_structure = 1 / 137 # dimensionless
+        mu = self._beam.mass() * self._target.mass() / (self._beam.mass() + self._target.mass()) # MeV
+        energy_cm = self._energy * (1 - self._beam.mass() / (self._beam.mass() + self._target.mass())) # MeV
+
+        sommerfield = self._beam.charge * self._target.charge * fine_structure * numpy.sqrt(mu / (2 * energy_cm))
+
         relation = xl1 / xl2
-        smatrix = (relation * hminus(0, r2) - hminus(0, r1)) / (relation * hplus(0, r2) - hminus(0, r1))
+
+        numerator = relation * hminus(sommerfield, r2) - hminus(sommerfield, r1)
+        denumerator = relation * hplus(sommerfield, r2) - hminus(sommerfield, r1)
+        smatrix = numerator / denumerator
 
         return complex(smatrix)
     
@@ -257,7 +266,7 @@ class Elastic:
 
         return 1 / (self.wavenumber) * (2 * l + 1) * legendre(numpy.cos(radians)) * (smatrix - 1)
     
-    def coulomb_amplitude(self, thetas: numpy.ndarray) -> numpy.ndarray:
+    def coulomb_cross_section(self, thetas: numpy.ndarray) -> numpy.ndarray:
         '''
         Params
         ------
@@ -273,16 +282,13 @@ class Elastic:
         reduced_planck = 6.582e-22 # MeV * s
         lightspeed = 3e23 # fm / s
         fine_structure = 1 / 137 # dimensionless
-        e2 = fine_structure * reduced_planck * lightspeed # MeV * fm
-        center_mass_energy = self._energy * (1 - self._beam.mass() / (self._beam.mass() + self._target.mass())) # MeV
-        sommerfield = self.wavenumber * self.beam.charge * self.target.charge * e2 / (2 * center_mass_energy) # dimensionless
-        
-        coefficient = - sommerfield / (2 * self.wavenumber * numpy.sin(radians / 2) ** 2)
-        exponent = numpy.exp(
-            2j * (arg_gamma(complex(1, sommerfield)) - sommerfield * numpy.log(numpy.sin(radians / 2)))
-        )
 
-        return coefficient * exponent
+        energy_cm = self._energy * (1 - self._beam.mass() / (self._beam.mass() + self._target.mass())) # MeV
+        e_power_2 = fine_structure * reduced_planck * lightspeed # MeV * fm
+        numerator = self._beam.charge * self._target.charge * e_power_2 # MeV * fm
+        denumerator = 4 * energy_cm * numpy.sin(radians / 2) ** 2 # MeV * rad
+
+        return numpy.power(numerator / denumerator, 2) * 10 # mb/sr
 
     def chi_square(self, theory: numpy.ndarray, experimenthal: numpy.ndarray, uncertainty: numpy.ndarray) -> float:
         '''
@@ -314,15 +320,16 @@ if __name__ == '__main__':
 
     Vd = 99.03; rv = 1.20; av = 0.755
     Ws = 20.96; rw = 1.31; aw = 0.645
+    rc = 1.28
 
     opt = Optical(beam, target)
     opt.add_real_volume(Vd, rv, av)
     opt.add_imag_surface(Ws, rw, aw)
-    opt.add_coulomb(1.28)
+    opt.add_coulomb(rc)
 
     elastic = Elastic(opt, E_lab)
     
-    angles, cross = elastic.xsections(2, 180, 0.5)
+    angles, cross = elastic.xsections(1, 180, 0.5)
 
     with open('src/exp.txt', 'r') as file:
         buffer = file.read().split('\n')
@@ -331,19 +338,19 @@ if __name__ == '__main__':
     for line in buffer:
         exp_ang.append(float(line.split(' ')[0]))
         exp_xs.append(float(line.split(' ')[1]))
-    
-    # with open('src/thr.txt', 'r') as file:
-    #     buffer = file.read().split('\n')
+        
+    with open('src/plot.txt', 'r') as file:
+        buffer = file.read().split('\n')[:-1]
 
-    # thr_ang, thr_xs = [], []
-    # for line in buffer:
-    #     thr_ang.append(float(line.split(' ')[0]))
-    #     thr_xs.append(float(line.split(' ')[1]))
+    thr_ang, thr_xs = [], []
+    for line in buffer:
+        blocks = line.split('\t')
+        thr_ang.append(float(blocks[0]))
+        thr_xs.append(float(blocks[1]))
 
     plt.plot(angles, cross, color='blue')
-    # plt.plot(thr_ang, thr_xs, color='red')
     plt.scatter(exp_ang, exp_xs, color='blue')
-
+    plt.plot(thr_ang, thr_xs, color='red')
     plt.yscale('log')
     plt.grid()
     plt.show()
