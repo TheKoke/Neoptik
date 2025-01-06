@@ -47,6 +47,26 @@ class Elastic:
         return self._energy
     
     @property
+    def center_mass_energy(self) -> float:
+        '''
+        Returns
+        -------
+        `Ecm` : `float`
+            Energy of system in c.m., MeV.
+        '''
+        return self._energy * (1 - self._beam.mass() / (self._beam.mass() + self._target.mass())) # MeV
+    
+    @property
+    def reduced_mass(self) -> float:
+        '''
+        Returns
+        -------
+        `mu` : `float`
+            Reduced mass of interacting nucleus, MeV.
+        '''
+        return self._beam.mass() * self._target.mass() / (self._beam.mass() + self._target.mass()) # MeV
+    
+    @property
     def wavenumber(self) -> float:
         '''
         Returns
@@ -56,10 +76,19 @@ class Elastic:
         '''
         h_bar = 6.582119e-22 # MeV * s
         c = 3e23 # fm / s
-        mu = self._beam.mass() * self._target.mass() / (self._beam.mass() + self._target.mass()) # MeV
-        center_mass_energy = self._energy * (1 - self._beam.mass() / (self._beam.mass() + self._target.mass())) # MeV
-
-        return numpy.sqrt(2 * mu * center_mass_energy / (h_bar ** 2 * c ** 2))
+        return numpy.sqrt(2 * self.reduced_mass * self.center_mass_energy / (h_bar ** 2 * c ** 2)) # fm^(-1)
+    
+    @property
+    def sommerfield(self) -> float:
+        '''
+        Returns
+        -------
+        `etha` : `float`
+            Somerfield parameter of interacting nuclei, dimensionless.
+        '''
+        z1 = self._beam.charge; z2 = self._target.charge
+        fine_structure = 1 / 137 # dimensionless
+        return z1 * z2 * fine_structure * numpy.sqrt(self.reduced_mass / (2 * self.center_mass_energy)) # dimensionless
     
     @property
     def potential(self) -> Optical:
@@ -73,7 +102,7 @@ class Elastic:
     
     def xsections(self, theta0: float, thetan: float, dtheta: float,
                   lmax: int = 20, 
-                  rmax: float = 25.0, dr: float = 0.01) -> tuple[numpy.ndarray, numpy.ndarray]:
+                  rmax: float = 30.0, dr: float = 0.1) -> tuple[numpy.ndarray, numpy.ndarray]:
         '''
         Main method for calculating elastic cross-section for given reaction.
 
@@ -92,7 +121,7 @@ class Elastic:
             Count of partial waves for sum, encounts from 0. Default value = 20.
 
         `rmax` : `float`
-            Maximal radius for integration, fm. Default value = 20.0.
+            Maximal radius for integration, fm. Default value = 30.0.
 
         `dr` : `float`
             Integration step size, fm. Default value = 0.01.
@@ -109,10 +138,8 @@ class Elastic:
         amplitudes = numpy.zeros_like(angles, dtype=numpy.complex64)
 
         results = []
-        # with multiprocessing.Pool(THREADS) as pool:
-        #     results = pool.starmap(self.partial_wave_amplitude, [(angles, i, rmax, dr) for i in range(THREADS)])
-        for i in range(lmax + 1):
-            results.append(self.partial_wave_amplitude(angles, i, rmax, dr))
+        with multiprocessing.Pool(THREADS) as pool:
+            results = pool.starmap(self.partial_wave_amplitude, [(angles, i, rmax, dr) for i in range(THREADS)])
 
         amplitudes += sum([fl for fl in results])
         cross = self.coulomb_cross_section(angles)
@@ -144,12 +171,15 @@ class Elastic:
             Certain partial wave amplitude, (mb/sr)^(1/2).
         '''
         centrifugal_potential = self.partial_wave_potential(l)
-        solutions = self.radial_solutions(centrifugal_potential, 2.0 * l * dr + 0.001, rmax, dr)
+        solutions = self.radial_solutions(centrifugal_potential, 2.0 * l * dr, rmax, dr)
 
-        r1, r2 = self.outward_radiuses()
-        smatrix = self.smatrix(r1, r2, solutions, l)
+        a = self.outward_radiuses()
+        smatrix = self.smatrix(a, l, solutions)
 
-        return self.scattering_amplitude(angles, smatrix, l)
+        radians = angles * numpy.pi / 180
+        legendre = Legendre(l)
+
+        return 1 / (self.wavenumber) * (2 * l + 1) * legendre(numpy.cos(radians)) * (smatrix - 1)
 
     def partial_wave_potential(self, l: int):
         '''
@@ -167,10 +197,8 @@ class Elastic:
         '''
         h_bar = 6.582119e-22 # MeV * s
         c = 3e23 # fm / s
-        mu = self._beam.mass() * self._target.mass() / (self._beam.mass() + self._target.mass()) # MeV
-        center_mass_energy = self._energy * (1 - self._beam.mass() / (self._beam.mass() + self._target.mass())) # MeV
 
-        return lambda r: l * (l + 1) / (r ** 2) + 2 * mu / (h_bar ** 2 * c ** 2) * (self.potential(r) - center_mass_energy)
+        return lambda r: l * (l + 1) / (r ** 2) + 2 * self.reduced_mass / (h_bar ** 2 * c ** 2) * (self.center_mass_energy - self.potential(r))
     
     def radial_solutions(self, potential, rmin: float, rmax: float, dr: float) -> tuple[numpy.ndarray, numpy.ndarray]:
         '''
@@ -191,80 +219,50 @@ class Elastic:
         '''
         return Numerov(potential, rmin, rmax, dr).solve()
 
-    def outward_radiuses(self) -> tuple[float, float]:
+    def outward_radiuses(self) -> float:
         '''
-        Method that \'calculates\' outward radiuses `r1` and `r2`
+        Method that \'calculates\' outward radiuses `a`.
 
         Returns
         -------
-        `radiuses` : `tuple[float, float]`
-            Matching outward radiuses in fermi.
+        `radius` : `float`
+            Matching outward radius in fermi.
         '''
-        return (27, 30) # TODO: brute-force, fix and try to automatize.
-
-    def smatrix(self, r1: float, r2: float, solutions: tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray], l: int) -> complex:
+        return 4 * numpy.pi * self.wavenumber
+    
+    def smatrix(self, a: float, l: int, solutions: tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]) -> complex:
         '''
         Params
         ------
-        `r1` : `float`
-            First outward radius, fm.
-
-        `r2` : `float`
-            Second outward radius, fm.
-
-        `solutions` : `tuple[numpy.ndarray[complex], numpy.ndarray[complex]]`
-            Solution of Schrodinger equation.
+        `a` : `float`
+            Matching radius, fm.
 
         `l` : `int`
             Partial wave number.
+
+        `solutions` : `tuple[numpy.ndarray[complex], numpy.ndarray[complex]]`
+            Solution of Schrodinger equation.
 
         Returns
         -------
         `dl` : `complex`
             Phase shift of certain partial wave, dimensionless.
         '''
-        xl1 = solutions[1][(numpy.abs(solutions[0] - r1)).argmin()]
-        xl2 = solutions[1][(numpy.abs(solutions[0] - r2)).argmin()]
+        index = numpy.abs(solutions[0] - a).argmin()
+        xl1 = solutions[1][index]
+        dxl1 = (solutions[1][index + 1] + solutions[1][index - 1]) / (2 * (solutions[0][index] - solutions[0][index - 1]))
 
         hminus = CoulombWaveFunction(l, False)
         hplus = CoulombWaveFunction(l, True)
 
-        fine_structure = 1 / 137 # dimensionless
-        mu = self._beam.mass() * self._target.mass() / (self._beam.mass() + self._target.mass()) # MeV
-        energy_cm = self._energy * (1 - self._beam.mass() / (self._beam.mass() + self._target.mass())) # MeV
+        etha = self.sommerfield
+        rmatrix = 1 / a * (xl1 / dxl1)
+        numerator = hminus(etha, self.wavenumber * a) - a * rmatrix * hminus.derivative(etha, self.wavenumber * a)
+        denumerator = hplus(etha, self.wavenumber * a) - a * rmatrix * hplus.derivative(etha, self.wavenumber * a)
 
-        sommerfield = self._beam.charge * self._target.charge * fine_structure * numpy.sqrt(mu / (2 * energy_cm))
-
-        relation = xl1 / xl2
-
-        numerator = relation * hminus(sommerfield, r2) - hminus(sommerfield, r1)
-        denumerator = relation * hplus(sommerfield, r2) - hminus(sommerfield, r1)
         smatrix = numerator / denumerator
 
         return complex(smatrix)
-    
-    def scattering_amplitude(self, thetas: numpy.ndarray, smatrix: complex, l: int) -> complex:
-        '''
-        Params
-        ------
-        `thetas` : `numpy.ndarray[float]`
-            Angles to calculate amplitude, deg.
-
-        `phase_shift` : `complex`
-            Phase shift of outgoing wave, dimensionless.
-
-        `l` : `int`'
-            Partial-wave number.
-
-        Returns
-        -------
-        `f` : `numpy.ndarray[complex]`
-            Scattering amplitude of cetain partial wave, (mb/sr)^(1/2).
-        '''
-        radians = thetas * numpy.pi / 180
-        legendre = Legendre(l)
-
-        return 1 / (self.wavenumber) * (2 * l + 1) * legendre(numpy.cos(radians)) * (smatrix - 1)
     
     def coulomb_cross_section(self, thetas: numpy.ndarray) -> numpy.ndarray:
         '''
@@ -316,7 +314,7 @@ if __name__ == '__main__':
 
     beam = Nuclei(1, 2)
     target = Nuclei(6, 13)
-    E_lab = 18
+    E_lab = 14.5
 
     Vd = 99.03; rv = 1.20; av = 0.755
     Ws = 20.96; rw = 1.31; aw = 0.645
@@ -331,26 +329,7 @@ if __name__ == '__main__':
     
     angles, cross = elastic.xsections(1, 180, 0.5)
 
-    with open('src/exp.txt', 'r') as file:
-        buffer = file.read().split('\n')
-
-    exp_ang, exp_xs = [], []
-    for line in buffer:
-        exp_ang.append(float(line.split(' ')[0]))
-        exp_xs.append(float(line.split(' ')[1]))
-        
-    with open('src/plot.txt', 'r') as file:
-        buffer = file.read().split('\n')[:-1]
-
-    thr_ang, thr_xs = [], []
-    for line in buffer:
-        blocks = line.split('\t')
-        thr_ang.append(float(blocks[0]))
-        thr_xs.append(float(blocks[1]))
-
     plt.plot(angles, cross, color='blue')
-    plt.scatter(exp_ang, exp_xs, color='blue')
-    plt.plot(thr_ang, thr_xs, color='red')
     plt.yscale('log')
     plt.grid()
     plt.show()

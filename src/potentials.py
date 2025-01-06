@@ -69,6 +69,7 @@ class Coulomb(Potential):
         lightspeed = 3e23 # fm / s
         fine_structure = 1 / 137 # dimensionless
         e2 = fine_structure * reduced_planck * lightspeed # MeV * fm
+        rc = self._rc * numpy.cbrt(self._target.nuclons)
 
         return self._z1 * self._z2 * e2 / self._rc * (3 / 2 - r ** 2 / (2 * self._rc ** 2)) if r <= self._rc \
                 else self._z1 * self._z2 * e2 / r # MeV

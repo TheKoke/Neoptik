@@ -23,9 +23,9 @@ class Numerov:
         prev_g = self.Veff(r)
         next_g = self.Veff(r + self.dr)
 
-        first_term = 2 * prev_y * (1 - (5 * self.dr ** 2) / 12 * prev_g)
-        second_term = prev_prev_y * (1 + self.dr ** 2 / 12 * prev_prev_g)
-        denumerator = 1 + self.dr ** 2 / 12 * next_g
+        first_term = 2 * prev_y * (1 - prev_g * (5 * self.dr ** 2) / 12)
+        second_term = prev_prev_y * (1 + prev_prev_g * self.dr ** 2 / 12)
+        denumerator = 1 + next_g * self.dr ** 2 / 12
 
         return (first_term - second_term) / denumerator
 
