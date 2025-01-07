@@ -176,7 +176,7 @@ class WSVolume(Potential):
         r_int = self._R * (numpy.cbrt(self._target.nuclons)) if self.is_beam_negligible() \
             else self._R * (numpy.cbrt(self._target.nuclons) + numpy.cbrt(self._beam.nuclons))
 
-        value = self._V / (1 + numpy.exp((r - r_int) / self._a))
+        value = -self._V / (1 + numpy.exp((r - r_int) / self._a))
         return value if not self._is_imag else 1j * value
     
     def volume_integral(self) -> float:
@@ -246,7 +246,7 @@ class WSSurface(Potential):
         r_int = self._R * (numpy.cbrt(self._target.nuclons)) if self.is_beam_negligible() \
             else self._R * (numpy.cbrt(self._target.nuclons) + numpy.cbrt(self._beam.nuclons))
 
-        value = 4 * self._V * numpy.exp((r - r_int) / self._a) / (1 + numpy.exp((r - r_int) / self._a)) ** 2
+        value = -4 * self._V * numpy.exp((r - r_int) / self._a) / (1 + numpy.exp((r - r_int) / self._a)) ** 2
         return value if not self._is_imag else 1j * value
     
     def volume_integral(self) -> float:

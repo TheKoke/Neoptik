@@ -6,7 +6,7 @@ from potentials import Optical
 from mathematics.chi import Chi_Square
 from mathematics.numerov import Numerov
 from mathematics.legendre import Legendre
-from mathematics.couloumb import CoulombWaveFunction, arg_gamma
+from mathematics.couloumb import CoulombWaveFunction
 
 
 class Elastic:
@@ -102,7 +102,7 @@ class Elastic:
     
     def xsections(self, theta0: float, thetan: float, dtheta: float,
                   lmax: int = 20, 
-                  rmax: float = 30.0, dr: float = 0.1) -> tuple[numpy.ndarray, numpy.ndarray]:
+                  rmax: float = 30.0, dr: float = 0.01) -> tuple[numpy.ndarray, numpy.ndarray]:
         '''
         Main method for calculating elastic cross-section for given reaction.
 
@@ -145,7 +145,7 @@ class Elastic:
 
         amplitudes += numpy.array(results).sum(axis=0)
         cross = (amplitudes * amplitudes.conj()).real
-        cross += self.coulomb_cross_section(angles)
+        cross += self.rutherford_cross_section(angles)
 
         return angles, cross
     
@@ -180,9 +180,8 @@ class Elastic:
 
         radians = angles * numpy.pi / 180
         legendre = Legendre(l)
-        coulomb_dl = arg_gamma(complex(l + 1, self.sommerfield))
 
-        return 1 / (self.wavenumber) * (2 * l + 1) * numpy.exp(coulomb_dl) * legendre(numpy.cos(radians)) * (smatrix - 1)
+        return 1 / (self.wavenumber) * (2 * l + 1) * legendre(numpy.cos(radians)) * (smatrix - 1)
 
     def partial_wave_potential(self, l: int):
         '''
@@ -269,7 +268,7 @@ class Elastic:
 
         return complex(smatrix)
     
-    def coulomb_cross_section(self, thetas: numpy.ndarray) -> numpy.ndarray:
+    def rutherford_cross_section(self, thetas: numpy.ndarray) -> numpy.ndarray:
         '''
         Params
         ------
@@ -321,7 +320,7 @@ if __name__ == '__main__':
     target = Nuclei(6, 13)
     E_lab = 14.5
 
-    Vd = 99.03; rv = 1.20; av = 0.755
+    Vd = 59.03; rv = 1.20; av = 0.755
     Ws = 20.96; rw = 1.31; aw = 0.645
     rc = 1.28
 
@@ -330,8 +329,15 @@ if __name__ == '__main__':
     opt.add_imag_surface(Ws, rw, aw)
     opt.add_coulomb(rc)
 
+    fig, axes = plt.subplots(1, 2)
+
+    rs = numpy.linspace(0, 30, 100)
+    axes[0].plot(rs, [opt(r).real for r in rs], color='blue')
+    axes[0].plot(rs, [opt(r).imag for r in rs], color='red')
+    axes[0].grid()
+
     elastic = Elastic(opt, E_lab)
-    angles, cross = elastic.xsections(1, 180, 0.5)
+    angles, cross = elastic.xsections(10, 180, 0.5, lmax=20)
 
     exp_ang, exp_xs = [], []
     with open('src/exp.txt', 'r') as file:
@@ -339,9 +345,17 @@ if __name__ == '__main__':
         for line in buffer:
             exp_ang.append(float(line.split()[0]))
             exp_xs.append(float(line.split()[1]))
+    
+    thr_ang, thr_xs = [], []
+    with open('src/plot.txt', 'r') as file:
+        buffer = file.read().split('\n')
+        for line in buffer:
+            thr_ang.append(float(line.split()[0]))
+            thr_xs.append(float(line.split()[1]))
 
-    plt.plot(angles, cross, color='blue')
-    plt.scatter(exp_ang, exp_xs, color='black')
-    plt.yscale('log')
-    plt.grid()
+    axes[1].plot(angles, cross, color='blue')
+    axes[1].scatter(exp_ang, exp_xs, color='black')
+    axes[1].plot(thr_ang, thr_xs, color='red')
+    axes[1].set_yscale('log')
+    axes[1].grid()
     plt.show()
