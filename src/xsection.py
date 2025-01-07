@@ -6,7 +6,7 @@ from potentials import Optical
 from mathematics.chi import Chi_Square
 from mathematics.numerov import Numerov
 from mathematics.legendre import Legendre
-from mathematics.couloumb import CoulombWaveFunction
+from mathematics.couloumb import CoulombWaveFunction, arg_gamma
 
 
 class Elastic:
@@ -138,12 +138,14 @@ class Elastic:
         amplitudes = numpy.zeros_like(angles, dtype=numpy.complex64)
 
         results = []
-        with multiprocessing.Pool(THREADS) as pool:
-            results = pool.starmap(self.partial_wave_amplitude, [(angles, i, rmax, dr) for i in range(THREADS)])
+        # with multiprocessing.Pool(THREADS) as pool:
+        #     results = pool.starmap(self.partial_wave_amplitude, [(angles, i, rmax, dr) for i in range(THREADS)])
+        for i in range(lmax + 1):
+            results.append(self.partial_wave_amplitude(angles, i, rmax, dr))
 
-        amplitudes += sum([fl for fl in results])
-        cross = self.coulomb_cross_section(angles)
-        cross += (amplitudes * amplitudes.conj()).real
+        amplitudes += numpy.array(results).sum(axis=0)
+        cross = (amplitudes * amplitudes.conj()).real
+        cross += self.coulomb_cross_section(angles)
 
         return angles, cross
     
@@ -178,8 +180,9 @@ class Elastic:
 
         radians = angles * numpy.pi / 180
         legendre = Legendre(l)
+        coulomb_dl = arg_gamma(complex(l + 1, self.sommerfield))
 
-        return 1 / (self.wavenumber) * (2 * l + 1) * legendre(numpy.cos(radians)) * (smatrix - 1)
+        return 1 / (self.wavenumber) * (2 * l + 1) * numpy.exp(coulomb_dl) * legendre(numpy.cos(radians)) * (smatrix - 1)
 
     def partial_wave_potential(self, l: int):
         '''
@@ -195,10 +198,12 @@ class Elastic:
         `potential` : `lambda`
             Partial wave potential.
         '''
-        h_bar = 6.582119e-22 # MeV * s
         c = 3e23 # fm / s
+        h_bar = 6.582119e-22 # MeV * s
+        mu = self.reduced_mass
+        ecm = self.center_mass_energy
 
-        return lambda r: l * (l + 1) / (r ** 2) + 2 * self.reduced_mass / (h_bar ** 2 * c ** 2) * (self.center_mass_energy - self.potential(r))
+        return lambda r: l * (l + 1) / (r ** 2) + 2 * mu / (h_bar ** 2 * c ** 2) * (ecm - self.potential(r))
     
     def radial_solutions(self, potential, rmin: float, rmax: float, dr: float) -> tuple[numpy.ndarray, numpy.ndarray]:
         '''
@@ -326,10 +331,17 @@ if __name__ == '__main__':
     opt.add_coulomb(rc)
 
     elastic = Elastic(opt, E_lab)
-    
     angles, cross = elastic.xsections(1, 180, 0.5)
 
+    exp_ang, exp_xs = [], []
+    with open('src/exp.txt', 'r') as file:
+        buffer = file.read().split('\n')
+        for line in buffer:
+            exp_ang.append(float(line.split()[0]))
+            exp_xs.append(float(line.split()[1]))
+
     plt.plot(angles, cross, color='blue')
+    plt.scatter(exp_ang, exp_xs, color='black')
     plt.yscale('log')
     plt.grid()
     plt.show()

@@ -10,7 +10,10 @@ class Legendre:
         return self._n
 
     def __call__(self, x: float | numpy.ndarray) -> float | numpy.ndarray:
-        pn = [1, x]
+        if self.order == 1:
+            return numpy.ones_like(x)
+
+        pn = [numpy.ones_like(x), x]
         for n in range(2, self.order + 1):
             prev = (2 * n + 1) / (n + 1) * x * pn[n - 1]
             prev_prev = n / (n + 1) * pn[n - 2]

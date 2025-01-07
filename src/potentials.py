@@ -3,11 +3,24 @@ from abc import ABC, abstractmethod
 
 import numpy
 from nuclear import Nuclei
+from mathematics.integration import Simpson
 
 
 class Potential(ABC):
-    def __init__(self) -> None:
-        pass
+    def __init__(self, beam: Nuclei, target: Nuclei) -> None:
+        self._beam = beam
+        self._target = target
+
+    @property
+    def beam(self) -> Nuclei:
+        return self._beam
+    
+    @property
+    def target(self) -> Nuclei:
+        return self._target
+    
+    def is_beam_negligible(self) -> bool:
+        return self._beam.nuclons <= 4
 
     @abstractmethod
     def function(self, r: float) -> float:
@@ -30,10 +43,7 @@ class Coulomb(Potential):
         `Rc` : float 
             Couloumb barrier radius, fm.
         """
-        super().__init__()
-        
-        self._beam = beam
-        self._target = target
+        super().__init__(beam, target)
 
         self._z1 = self._beam.charge
         self._z2 = self._target.charge
@@ -69,10 +79,11 @@ class Coulomb(Potential):
         lightspeed = 3e23 # fm / s
         fine_structure = 1 / 137 # dimensionless
         e2 = fine_structure * reduced_planck * lightspeed # MeV * fm
-        rc = self._rc * numpy.cbrt(self._target.nuclons)
+        rc = self._rc * numpy.cbrt(self._target.nuclons) if self.is_beam_negligible() \
+            else self._rc * (numpy.cbrt(self._target.nuclons) + numpy.cbrt(self._beam.nuclons))
 
-        return self._z1 * self._z2 * e2 / self._rc * (3 / 2 - r ** 2 / (2 * self._rc ** 2)) if r <= self._rc \
-                else self._z1 * self._z2 * e2 / r # MeV
+        return -self._z1 * self._z2 * e2 / rc * (3 / 2 - r ** 2 / (2 * rc ** 2)) if r <= rc \
+                else -self._z1 * self._z2 * e2 / r # MeV
 
 
 
@@ -128,10 +139,7 @@ class WSVolume(Potential):
         `is_imag` : `bool`
             Flag for imaginary potential, if is imaginary it is equal True, otherwaise False.
         """
-        super().__init__()
-        
-        self._beam = beam
-        self._target = target
+        super().__init__(beam, target)
 
         self._V = params.V
         self._R = params.R
@@ -150,9 +158,6 @@ class WSVolume(Potential):
     @property
     def a(self) -> float:
         return self._a
-    
-    def is_beam_negligible(self) -> bool:
-        return self._beam.nuclons < 5
     
     def function(self, r: float) -> float:
         """
@@ -204,10 +209,7 @@ class WSSurface(Potential):
         `is_imag` : `bool`
             Flag for imaginary potential, if is imaginary it is equal True, otherwaise False.
         """
-        super().__init__()
-        
-        self._beam = beam
-        self._target = target
+        super().__init__(beam, target)
 
         self._V = params.V
         self._R = params.R
@@ -226,9 +228,6 @@ class WSSurface(Potential):
     @property
     def a(self) -> float:
         return self._a
-    
-    def is_beam_negligible(self) -> bool:
-        return self._beam.nuclons < 5
     
     def function(self, r: float) -> float:
         """
@@ -280,10 +279,7 @@ class SpinOrbit(Potential):
         `imag_params` : `WSParameters`
             Parameters of imaginary part of potential.
         """
-        super().__init__()
-        
-        self._beam = beam
-        self._target = target
+        super().__init__(beam, target)
 
         self._V = real_params.V
         self._W = imag_params.V
@@ -305,9 +301,6 @@ class SpinOrbit(Potential):
     @property
     def W(self) -> float:
         return self._W
-    
-    def is_beam_negligible(self) -> bool:
-        return self._beam.nuclons < 5
     
     def function(self, r: float) -> complex:
         """
@@ -367,24 +360,24 @@ class Optical:
         return self._target
 
     def add_real_volume(self, V: float, r: float, a: float) -> bool:
-        params = WSParameters(-V, r, a)
+        params = WSParameters(V, r, a)
         self._potentials.append(WSVolume(self._beam, self._target, params))
 
     def add_real_surface(self, V: float, r: float, a: float) -> bool:
-        params = WSParameters(-V, r, a)
+        params = WSParameters(V, r, a)
         self._potentials.append(WSSurface(self._beam, self._target, params))
 
     def add_imag_volume(self, W: float, r: float, a: float) -> bool:
-        params = WSParameters(-W, r, a)
+        params = WSParameters(W, r, a)
         self._potentials.append(WSVolume(self._beam, self._target, params, is_imag=True))
 
     def add_imag_surface(self, W: float, r: float, a: float) -> bool:
-        params = WSParameters(-W, r, a)
+        params = WSParameters(W, r, a)
         self._potentials.append(WSSurface(self._beam, self._target, params, is_imag=True))
 
     def add_spin_orbit(self, V: float, W: float, r: float, a: float, s: float, i: int) -> bool:
-        realparams = WSParameters(-V, r, a)
-        imagparams = WSParameters(-W, r, a)
+        realparams = WSParameters(V, r, a)
+        imagparams = WSParameters(W, r, a)
         self._potentials.append(SpinOrbit(self._beam, self._target, realparams, imagparams))
 
     def add_coulomb(self, rc: float) -> bool:
