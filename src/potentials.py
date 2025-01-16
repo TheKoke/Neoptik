@@ -26,6 +26,24 @@ class Potential(ABC):
     def function(self, r: float) -> float:
         pass
 
+    def volume_integral(self) -> float:
+        """
+        The volume integral of potential - `J`
+
+        Returns
+        -------
+        Volume integral of potential - `Jv`. MeV * fm^3
+        """
+        return Simpson.take_integral(self.function, 0.0, 30.0) / (self._beam.nuclons * self._target.nuclons)
+
+
+class ZeroPotential(Potential):
+    def __init__(self):
+        super().__init__(None, None)
+
+    def function(self, r: float):
+        return 0.0
+
 
 class Coulomb(Potential):
     def __init__(self, beam: Nuclei, target: Nuclei, Rc: float) -> None:
@@ -178,16 +196,6 @@ class WSVolume(Potential):
 
         value = -self._V / (1 + numpy.exp((r - r_int) / self._a))
         return value if not self._is_imag else 1j * value
-    
-    def volume_integral(self) -> float:
-        """
-        The volume integral of potential - `J`
-
-        Returns
-        -------
-        Volume integral of potential - `Jv`. MeV * fm^3
-        """
-        pass
 
 
 class WSSurface(Potential):
@@ -248,16 +256,6 @@ class WSSurface(Potential):
 
         value = -4 * self._V * numpy.exp((r - r_int) / self._a) / (1 + numpy.exp((r - r_int) / self._a)) ** 2
         return value if not self._is_imag else 1j * value
-    
-    def volume_integral(self) -> float:
-        """
-        The volume integral of potential - `J`
-
-        Returns
-        -------
-        Volume integral of potential - `Jv`. MeV * fm^3
-        """
-        pass
 
 
 class SpinOrbit(Potential):
@@ -282,9 +280,11 @@ class SpinOrbit(Potential):
         super().__init__(beam, target)
 
         self._V = real_params.V
-        self._W = imag_params.V
-        self._R = real_params.R
+        self._r = real_params.R
         self._a = real_params.a
+        self._W = imag_params.V
+        self._ir = imag_params.R
+        self._ia = imag_params.a
 
     @property
     def V(self) -> float:
@@ -292,7 +292,7 @@ class SpinOrbit(Potential):
     
     @property
     def R(self) -> float:
-        return self._R
+        return self._r
     
     @property
     def a(self) -> float:
@@ -301,6 +301,14 @@ class SpinOrbit(Potential):
     @property
     def W(self) -> float:
         return self._W
+    
+    @property
+    def iR(self) -> float:
+        return self._ir
+    
+    @property
+    def ia(self) -> float:
+        return self._ia
     
     def function(self, r: float) -> complex:
         """
@@ -322,17 +330,17 @@ class SpinOrbit(Potential):
         pion_mass = 134.977 # MeV
         coefficient = (reduced_planck * lightspeed / pion_mass) ** 2 # fm^2
 
-        r_int = self._R * (numpy.cbrt(self._target.nuclons)) if self.is_beam_negligible() \
-            else self._R * (numpy.cbrt(self._target.nuclons) + numpy.cbrt(self._beam.nuclons))
+        r_int = self._r * (numpy.cbrt(self._target.nuclons)) if self.is_beam_negligible() \
+            else self._r * (numpy.cbrt(self._target.nuclons) + numpy.cbrt(self._beam.nuclons))
         
-        ir_int = self._R * (numpy.cbrt(self._target.nuclons)) if self.is_beam_negligible() \
-            else self._R * (numpy.cbrt(self._target.nuclons) + numpy.cbrt(self._beam.nuclons))
+        ir_int = self._ir * (numpy.cbrt(self._target.nuclons)) if self.is_beam_negligible() \
+            else self._ir * (numpy.cbrt(self._target.nuclons) + numpy.cbrt(self._beam.nuclons))
         
         real_exp = numpy.exp((r - r_int) / self._a)
         imag_exp = numpy.exp((r - ir_int) / self._a)
 
         real_part = self._V * 1 / (r * self._a) * real_exp / (1 + real_exp) ** 2 # MeV / fm
-        imag_part = self._W * 1 / (r * self._a) * imag_exp / (1 + imag_exp) ** 2 # MeV / fm
+        imag_part = self._W * 1 / (r * self._ia) * imag_exp / (1 + imag_exp) ** 2 # MeV / fm
 
         # Add scalar multiplication of l and s.
         # (l, s) => 1/2 * [j(j + 1) - l(l + 1) - s(s + 1)]
@@ -342,14 +350,23 @@ class SpinOrbit(Potential):
     
 
 class Optical:
-    def __init__(self, beam: Nuclei, target: Nuclei) -> None:
+    def __init__(self, beam: Nuclei, target: Nuclei, 
+                 real: Potential, imag: Potential,
+                 coul: Potential = ZeroPotential(), 
+                 spin: Potential = ZeroPotential()) -> None:
         self._beam = beam
         self._target = target
 
-        self._potentials: list[Potential] = []
+        self._coulomb = coul
+        self._real_part = real
+        self._imag_part = imag
+        self._spinorbit = spin
 
     def __call__(self, r: float) -> float:
-        return sum(pot.function(r) for pot in self._potentials)
+        return self._real_part.function(r) + \
+               self._imag_part.function(r) + \
+               self._coulomb.function(r) + \
+               self._spinorbit.function(r)
 
     @property
     def beam(self) -> Nuclei:
@@ -358,30 +375,22 @@ class Optical:
     @property
     def target(self) -> Nuclei:
         return self._target
-
-    def add_real_volume(self, V: float, r: float, a: float) -> bool:
-        params = WSParameters(V, r, a)
-        self._potentials.append(WSVolume(self._beam, self._target, params))
-
-    def add_real_surface(self, V: float, r: float, a: float) -> bool:
-        params = WSParameters(V, r, a)
-        self._potentials.append(WSSurface(self._beam, self._target, params))
-
-    def add_imag_volume(self, W: float, r: float, a: float) -> bool:
-        params = WSParameters(W, r, a)
-        self._potentials.append(WSVolume(self._beam, self._target, params, is_imag=True))
-
-    def add_imag_surface(self, W: float, r: float, a: float) -> bool:
-        params = WSParameters(W, r, a)
-        self._potentials.append(WSSurface(self._beam, self._target, params, is_imag=True))
-
-    def add_spin_orbit(self, V: float, W: float, r: float, a: float, s: float, i: int) -> bool:
-        realparams = WSParameters(V, r, a)
-        imagparams = WSParameters(W, r, a)
-        self._potentials.append(SpinOrbit(self._beam, self._target, realparams, imagparams))
-
-    def add_coulomb(self, rc: float) -> bool:
-        self._potentials.append(Coulomb(self._beam, self._target, rc))
+    
+    @property
+    def real_part(self) -> Potential:
+        return self._real_part
+    
+    @property
+    def imaginary_part(self) -> Potential:
+        return self._imag_part
+    
+    @property
+    def coulomb_potential(self) -> Potential:
+        return self._coulomb
+    
+    @property
+    def spin_orbit(self) -> Potential:
+        return self._spinorbit
 
 
 if __name__ == '__main__':

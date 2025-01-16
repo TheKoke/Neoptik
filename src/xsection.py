@@ -2,11 +2,11 @@ import numpy
 import multiprocessing
 
 from nuclear import Nuclei
-from potentials import Optical
 from mathematics.chi import Chi_Square
 from mathematics.numerov import Numerov
 from mathematics.legendre import Legendre
 from mathematics.couloumb import CoulombWaveFunction
+from potentials import Optical, WSVolume, WSSurface, WSParameters, Coulomb, SpinOrbit
 
 
 class Elastic:
@@ -320,20 +320,17 @@ if __name__ == '__main__':
     target = Nuclei(6, 13)
     E_lab = 14.5
 
-    Vd = 59.03; rv = 1.20; av = 0.755
-    Ws = 20.96; rw = 1.31; aw = 0.645
-    rc = 1.28
+    real = WSVolume(beam, target, WSParameters(99.03, 1.20, 0.755))
+    imag = WSVolume(beam, target, WSParameters(20.96, 1.31, 0.645), is_imag=True)
+    coul = Coulomb(beam, target, 1.30)
 
-    opt = Optical(beam, target)
-    opt.add_real_volume(Vd, rv, av)
-    opt.add_imag_surface(Ws, rw, aw)
-    opt.add_coulomb(rc)
+    opt = Optical(beam, target, real, imag, coul)
 
     fig, axes = plt.subplots(1, 2)
 
-    rs = numpy.linspace(0, 30, 100)
-    axes[0].plot(rs, [opt(r).real for r in rs], color='blue')
-    axes[0].plot(rs, [opt(r).imag for r in rs], color='red')
+    rs = numpy.linspace(0, 15, 100)
+    axes[0].plot(rs, [opt.real_part.function(r) for r in rs], color='blue')
+    axes[0].plot(rs, [opt.imaginary_part.function(r).imag for r in rs], color='red')
     axes[0].grid()
 
     elastic = Elastic(opt, E_lab)
