@@ -1,5 +1,6 @@
 import numpy
 
+
 class Simpson:
     '''
     a

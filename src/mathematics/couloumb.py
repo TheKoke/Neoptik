@@ -1,5 +1,4 @@
 import numpy
-from mpmath import coulombf, coulombg
 
 
 def factorial(n: int) -> int:
@@ -7,7 +6,7 @@ def factorial(n: int) -> int:
 
 
 def arg_gamma(z: complex) -> float:
-    return numpy.angle(gamma_function(z))
+    return numpy.angle(gamma_function(z)) + 2 * numpy.pi
 
 
 def gamma_function(z: complex) -> complex:
@@ -50,9 +49,12 @@ class Regular:
     @property
     def l(self) -> int:
         return self.__l
+    
+    def theta(self, etha: float, ro: float) -> float:
+        return ro - etha * numpy.log(2 * ro) - self.__l * numpy.pi / 2 + arg_gamma(complex(self.__l + 1, etha))
 
     def __call__(self, etha: float, ro: float) -> float:
-        return coulombf(self.__l, etha, ro)
+        return numpy.sin(self.theta(etha, ro))
     
 
 class Irregular:
@@ -62,9 +64,12 @@ class Irregular:
     @property
     def l(self) -> int:
         return self.__l
+    
+    def theta(self, etha: float, ro: float) -> float:
+        return ro - etha * numpy.log(2 * ro) - self.__l * numpy.pi / 2 + arg_gamma(complex(self.__l + 1, etha))
 
     def __call__(self, etha: float, ro: float) -> float:
-        return coulombg(self.__l, etha, ro)
+        return numpy.cos(self.theta(etha, ro))
 
 
 class CoulombWaveFunction:

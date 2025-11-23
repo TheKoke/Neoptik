@@ -79,7 +79,7 @@ class Coulomb(Potential):
     def Rc(self) -> float:
         return self._rc
 
-    def function(self, r: float) -> float:
+    def function(self, r: float | numpy.ndarray) -> numpy.ndarray:
         """
         Coulomb potential near nuclear radiuses - `Vc(r)`.
 
@@ -93,15 +93,21 @@ class Coulomb(Potential):
         `Vc` : float
             Value of coulomb potential at point `r`, MeV.
         """
-        reduced_planck = 6.582e-22 # MeV * s
-        lightspeed = 3e23 # fm / s
+        c = 2e23 # fm / s
+        h_bar = 6.582e-22 # MeV * s
         fine_structure = 1 / 137 # dimensionless
-        e2 = fine_structure * reduced_planck * lightspeed # MeV * fm
+        e2 = fine_structure * h_bar * c # MeV * fm
         rc = self._rc * numpy.cbrt(self._target.nuclons) if self.is_beam_negligible() \
             else self._rc * (numpy.cbrt(self._target.nuclons) + numpy.cbrt(self._beam.nuclons))
+        
+        if isinstance(r, numpy.ndarray):
+            potential = numpy.zeros_like(r)
+            potential[r <= rc] = -self._z1 * self._z2 * e2 / rc * (3 / 2 - r[r <= rc] ** 2 / (2 * rc ** 2))
+            potential[r >= rc] = -self._z1 * self._z2 * e2 / r[r >= rc]
+            return potential
 
-        return -self._z1 * self._z2 * e2 / rc * (3 / 2 - r ** 2 / (2 * rc ** 2)) if r <= rc \
-                else -self._z1 * self._z2 * e2 / r # MeV
+        return self._z1 * self._z2 * e2 / rc * (3 / 2 - r ** 2 / (2 * rc ** 2)) if r <= rc \
+                else self._z1 * self._z2 * e2 / r # MeV
 
 
 

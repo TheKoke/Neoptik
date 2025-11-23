@@ -5,7 +5,7 @@ from nuclear import Nuclei
 from mathematics.chi import Chi_Square
 from mathematics.numerov import Numerov
 from mathematics.legendre import Legendre
-from mathematics.couloumb import CoulombWaveFunction
+from mathematics.couloumb import CoulombWaveFunction, arg_gamma
 from potentials import Optical, WSVolume, WSSurface, WSParameters, Coulomb, SpinOrbit
 
 
@@ -140,16 +140,16 @@ class Elastic:
         results = []
         # with multiprocessing.Pool(THREADS) as pool:
         #     results = pool.starmap(self.partial_wave_amplitude, [(angles, i, rmax, dr) for i in range(THREADS)])
-        for i in range(lmax + 1):
+        for i in range(THREADS):
             results.append(self.partial_wave_amplitude(angles, i, rmax, dr))
 
         amplitudes += numpy.array(results).sum(axis=0)
+        amplitudes += self.rutherford_amplitude(angles)
         cross = (amplitudes * amplitudes.conj()).real
-        cross += self.rutherford_cross_section(angles)
 
         return angles, cross
     
-    def partial_wave_amplitude(self, angles: numpy.ndarray, l: int, rmax: int, dr: float) -> numpy.ndarray:
+    def partial_wave_amplitude(self, angles: numpy.ndarray, l: int, rmax: float, dr: float) -> numpy.ndarray:
         '''
         Method that calculates certain partial wave amplitude - `fl`
 
@@ -172,58 +172,43 @@ class Elastic:
         `fl` : `numpy.ndarray[complex]`
             Certain partial wave amplitude, (mb/sr)^(1/2).
         '''
-        centrifugal_potential = self.partial_wave_potential(l)
-        solutions = self.radial_solutions(centrifugal_potential, 2.0 * l * dr, rmax, dr)
+        rmin = 2 * l * dr if l > 0 else dr
+        grid = numpy.linspace(rmin, rmax, int((rmax - rmin) / dr) + 1)
+        solutions = self.radial_solutions(l, grid)
 
-        a = self.outward_radiuses()
-        smatrix = self.smatrix(a, l, solutions)
+        a1, a2 = self.outward_radiuses()
+        smatrix = self.smatrix(a1, a2, l, solutions)
+        print(smatrix)
 
-        radians = angles * numpy.pi / 180
         legendre = Legendre(l)
-
-        return 1 / (self.wavenumber) * (2 * l + 1) * legendre(numpy.cos(radians)) * (smatrix - 1)
-
-    def partial_wave_potential(self, l: int):
-        '''
-        Method for creating full potential of partial-wave dispansion.
-
-        Params
-        ------
-        `l` : `int`
-            Partial wave number.
-
-        Returns
-        -------
-        `potential` : `lambda`
-            Partial wave potential.
-        '''
-        c = 3e23 # fm / s
-        h_bar = 6.582119e-22 # MeV * s
-        mu = self.reduced_mass
-        ecm = self.center_mass_energy
-
-        return lambda r: l * (l + 1) / (r ** 2) + 2 * mu / (h_bar ** 2 * c ** 2) * (ecm - self.potential(r))
+        return 1 / (complex(0, 2 * self.wavenumber)) * (2 * l + 1) * legendre(numpy.cos(numpy.radians(angles))) * (smatrix - 1)
     
-    def radial_solutions(self, potential, rmin: float, rmax: float, dr: float) -> tuple[numpy.ndarray, numpy.ndarray]:
+    def radial_solutions(self, l: int, r: numpy.ndarray) -> tuple[numpy.ndarray, numpy.ndarray]:
         '''
         Method for numerical solving Schrodinger equations with given potential `self.potential`
 
         Params
         ------
-        `rmax` : `float`
-            Maximal value of radius for integrating.\n
+        `l` : `int`
+            Partial wave number.\n
 
-        `dr` : `float`
-            Integration step.
+        `r` : `numpy.ndarray`
+            Integration grid.
 
         Returns
         --------
         `radials` : `tuple[numpy.ndarray[complex], numpy.ndarray[complex]]`
             Solution of Schrodinger eq. 
         '''
-        return Numerov(potential, rmin, rmax, dr).solve()
+        c = 3e23 # fm / s
+        h_bar = 6.582119e-22 # MeV * s
+        mu = self.reduced_mass
+        ecm = self.center_mass_energy
+        potential = l * (l + 1) / (r ** 2) + 2 * mu / (h_bar ** 2 * c ** 2) * (self.potential(r) - ecm)
 
-    def outward_radiuses(self) -> float:
+        return Numerov(potential, r).thorlacius()
+
+    def outward_radiuses(self) -> tuple[float, float]:
         '''
         Method that \'calculates\' outward radiuses `a`.
 
@@ -232,9 +217,9 @@ class Elastic:
         `radius` : `float`
             Matching outward radius in fermi.
         '''
-        return 4 * numpy.pi * self.wavenumber
+        return (6.0, 6.1)
     
-    def smatrix(self, a: float, l: int, solutions: tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]) -> complex:
+    def smatrix(self, a1: float, a2: float, l: int, solutions: tuple[numpy.ndarray, numpy.ndarray]) -> complex:
         '''
         Params
         ------
@@ -249,48 +234,43 @@ class Elastic:
 
         Returns
         -------
-        `dl` : `complex`
-            Phase shift of certain partial wave, dimensionless.
+        `S` : `complex`
+            Scaterring matrix of certain partial wave, dimensionless.
         '''
-        index = numpy.abs(solutions[0] - a).argmin()
-        xl1 = solutions[1][index]
-        dxl1 = (solutions[1][index + 1] + solutions[1][index - 1]) / (2 * (solutions[0][index] - solutions[0][index - 1]))
+        etha = self.sommerfield
+    
+        index1 = numpy.abs(solutions[0] - a1).argmin()
+        index2 = numpy.abs(solutions[1] - a2).argmin()
+
+        xl1 = solutions[1][index1]
+        xl2 = solutions[1][index2]
 
         hminus = CoulombWaveFunction(l, False)
         hplus = CoulombWaveFunction(l, True)
 
-        etha = self.sommerfield
-        rmatrix = 1 / a * (xl1 / dxl1)
-        numerator = hminus(etha, self.wavenumber * a) - a * rmatrix * hminus.derivative(etha, self.wavenumber * a)
-        denumerator = hplus(etha, self.wavenumber * a) - a * rmatrix * hplus.derivative(etha, self.wavenumber * a)
+        numerator = xl1 * hplus(etha, a2 * self.wavenumber) - xl2 * hminus(etha, a1 * self.wavenumber)
+        denumerator = xl2 * hplus(etha, a1 * self.wavenumber) - xl1 * hminus(etha, a2 * self.wavenumber)
 
         smatrix = numerator / denumerator
 
         return complex(smatrix)
     
-    def rutherford_cross_section(self, thetas: numpy.ndarray) -> numpy.ndarray:
+    def rutherford_amplitude(self, thetas: numpy.ndarray) -> numpy.ndarray:
         '''
         Params
         ------
         `thetas` : `numpy.ndarray`
-            Angles coulomb amplitude calculates to, deg.
+            Angles Rutherford scattering calculates to, deg.
 
         Returns
         -------
         `fc` : `numpy.ndarray[float]`
             Coulomb scattering amplitude, (mb/sr)^(1/2)
         '''
-        radians = thetas * numpy.pi / 180
-        reduced_planck = 6.582e-22 # MeV * s
-        lightspeed = 3e23 # fm / s
-        fine_structure = 1 / 137 # dimensionless
+        const = - self.sommerfield / (2 * self.wavenumber * numpy.sin(numpy.radians(thetas / 2)) ** 2)
+        exp = -1j * self.sommerfield * numpy.log(numpy.sin(numpy.radians(thetas / 2)) ** 2) + 2j * arg_gamma(1 + 1j * self.sommerfield)
 
-        energy_cm = self._energy * (1 - self._beam.mass() / (self._beam.mass() + self._target.mass())) # MeV
-        e_power_2 = fine_structure * reduced_planck * lightspeed # MeV * fm
-        numerator = self._beam.charge * self._target.charge * e_power_2 # MeV * fm
-        denumerator = 4 * energy_cm * numpy.sin(radians / 2) ** 2 # MeV * rad
-
-        return numpy.power(numerator / denumerator, 2) * 10 # mb/sr
+        return const * numpy.exp(exp)
 
     def chi_square(self, theory: numpy.ndarray, experimenthal: numpy.ndarray, uncertainty: numpy.ndarray) -> float:
         '''
@@ -334,25 +314,25 @@ if __name__ == '__main__':
     axes[0].grid()
 
     elastic = Elastic(opt, E_lab)
-    angles, cross = elastic.xsections(10, 180, 0.5, lmax=20)
+    angles, cross = elastic.xsections(10, 180, 0.5, lmax=-1)
 
-    exp_ang, exp_xs = [], []
-    with open('src/exp.txt', 'r') as file:
-        buffer = file.read().split('\n')
-        for line in buffer:
-            exp_ang.append(float(line.split()[0]))
-            exp_xs.append(float(line.split()[1]))
+    # exp_ang, exp_xs = [], []
+    # with open('src/exp.txt', 'r') as file:
+    #     buffer = file.read().split('\n')
+    #     for line in buffer:
+    #         exp_ang.append(float(line.split()[0]))
+    #         exp_xs.append(float(line.split()[1]))
     
-    thr_ang, thr_xs = [], []
-    with open('src/plot.txt', 'r') as file:
-        buffer = file.read().split('\n')
-        for line in buffer:
-            thr_ang.append(float(line.split()[0]))
-            thr_xs.append(float(line.split()[1]))
+    # thr_ang, thr_xs = [], []
+    # with open('src/plot.txt', 'r') as file:
+    #     buffer = file.read().split('\n')
+    #     for line in buffer:
+    #         thr_ang.append(float(line.split()[0]))
+    #         thr_xs.append(float(line.split()[1]))
 
     axes[1].plot(angles, cross, color='blue')
-    axes[1].scatter(exp_ang, exp_xs, color='black')
-    axes[1].plot(thr_ang, thr_xs, color='red')
+    # axes[1].scatter(exp_ang, exp_xs, color='black')
+    # axes[1].plot(thr_ang, thr_xs, color='red')
     axes[1].set_yscale('log')
     axes[1].grid()
     plt.show()

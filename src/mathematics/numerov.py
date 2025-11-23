@@ -2,32 +2,61 @@ import numpy
 
 
 class Numerov:
-    def __init__(self, Veff = lambda r: 1 / r, rmin: float = 0.0, rmax: float = 25.0, dr: float = 0.01) -> None:
-        self.Veff = Veff
+    def __init__(self, Veff: numpy.ndarray, rgrid: numpy.ndarray) -> None:
+        if len(Veff) != len(rgrid):
+            raise ValueError("The sizes of potential and integrating grid must be same!")
 
-        self.rmin = rmin
-        self.rmax = rmax
-        self.dr = dr
+        self.__Veff = Veff
+        self.__grid = rgrid
+
+    @property
+    def Veff(self) -> numpy.ndarray:
+        return self.__Veff.copy()
+    
+    @property
+    def grid(self) -> numpy.ndarray:
+        return self.__grid.copy()
 
     def solve(self) -> tuple[numpy.ndarray, numpy.ndarray]:
-        grid = numpy.linspace(self.rmin, self.rmax, int(self.rmax / self.dr))
-        ys = [0.0, self.dr]
+        dr = self.__grid[1] - self.__grid[0]
+        ys = [0.0, dr]
 
-        for i in range(2, len(grid)):
-            ys.append(self.next_point(ys[i - 1], ys[i - 2], grid[i]))
+        for i in range(2, len(self.__grid) - 1):
+            prev_prev_g = self.Veff[i - 1]
+            prev_g = self.Veff[i]
+            next_g = self.Veff[i + 1]
 
-        return (grid, ys)
+            first_term = 2 * ys[i - 1] * (1 - prev_g * (5 * dr ** 2) / 12)
+            second_term = ys[i - 2] * (1 + prev_prev_g * dr ** 2 / 12)
+            denumerator = 1 + next_g * dr ** 2 / 12
 
-    def next_point(self, prev_y: float, prev_prev_y: float, r: float) -> float:
-        prev_prev_g = self.Veff(r - self.dr)
-        prev_g = self.Veff(r)
-        next_g = self.Veff(r + self.dr)
+            ys.append((first_term - second_term) / denumerator)
 
-        first_term = 2 * prev_y * (1 - prev_g * (5 * self.dr ** 2) / 12)
-        second_term = prev_prev_y * (1 + prev_prev_g * self.dr ** 2 / 12)
-        denumerator = 1 + next_g * self.dr ** 2 / 12
+        return (self.grid, ys)
+    
+    def thorlacius(self) -> tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]:
+        dr = self.__grid[1] - self.__grid[0]
+        ws = [0.0, dr ** 3]
+        ys = [0.0, 12 * dr / (self.__Veff[1])]
+        dys = []
+        
+        for i in range(2, len(self.__grid) - 1):
+            first_term = 2 * numpy.cosh(numpy.sqrt(self.Veff[i] * dr ** 2)) * ws[i - 1]
+            second_term = ws[i - 2]
 
-        return (first_term - second_term) / denumerator
+            ws.append(first_term - second_term)
+            ys.append(ws[-1] / (self.__Veff[i] * dr ** 2 / 12))
+
+        for i in range(1, len(ys) - 1):
+            first_term = (1 - self.__Veff[i + 1] * dr ** 2 / 6) * ys[i + 1]
+            second_term = (1 - self.__Veff[i - 1] * dr ** 2 / 6) * ys[i - 1]
+            
+            S = self.__Veff[i] * dr ** 2
+            denumerator = (dr / 3) * (6 - S) * numpy.sinh(numpy.sqrt(S)) / numpy.sqrt(S)
+
+            dys.append((first_term - second_term) / denumerator)
+
+        return (self.__grid, numpy.array(ys), numpy.array(dys))
 
 
 if __name__ == '__main__':
