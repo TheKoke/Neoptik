@@ -32,7 +32,7 @@ class Numerov:
 
             ys.append((first_term - second_term) / denumerator)
 
-        return (self.grid, ys)
+        return (self.grid, numpy.array(ys))
     
     def thorlacius(self) -> tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]:
         dr = self.__grid[1] - self.__grid[0]

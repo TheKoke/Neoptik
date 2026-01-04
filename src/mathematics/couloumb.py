@@ -5,8 +5,8 @@ def factorial(n: int) -> int:
     return numpy.arange(1, n + 1).prod()
 
 
-def arg_gamma(z: complex) -> float:
-    return numpy.angle(gamma_function(z)) + 2 * numpy.pi
+def coulomb_phase_shift(l: int, eta: float) -> float:
+    return numpy.angle(numpy.exp(1j * numpy.log(numpy.abs(gamma_function(1j * eta))))) + sum([numpy.arctan(eta / n) for n in range(1, l + 1)])
 
 
 def gamma_function(z: complex) -> complex:
@@ -42,56 +42,138 @@ def gamma_function(z: complex) -> complex:
     return sqrt * power * exp * x
     
 
-class Regular:
+class CoulombWaveFunctions:
     def __init__(self, l: int) -> None:
         self.__l = l
 
-    @property
-    def l(self) -> int:
-        return self.__l
-    
-    def theta(self, etha: float, ro: float) -> float:
-        return ro - etha * numpy.log(2 * ro) - self.__l * numpy.pi / 2 + arg_gamma(complex(self.__l + 1, etha))
-
-    def __call__(self, etha: float, ro: float) -> float:
-        return numpy.sin(self.theta(etha, ro))
-    
-
-class Irregular:
-    def __init__(self, l: int) -> None:
-        self.__l = l
+        self.__etha = 0.0
+        self.__ro = 0.0
+        self.__fl = -999.0 * numpy.ones(1) 
+        self.__gl = -999.0 * numpy.ones(1) 
+        self.__hlp = -999.0 * numpy.ones(1) 
+        self.__hlm = -999.0 * numpy.ones(1) 
+        self.__dfl = -999.0 * numpy.ones(1) 
+        self.__dgl = -999.0 * numpy.ones(1) 
+        self.__dhlp = -999.0 * numpy.ones(1) 
+        self.__dhlm = -999.0 * numpy.ones(1)
 
     @property
     def l(self) -> int:
         return self.__l
     
-    def theta(self, etha: float, ro: float) -> float:
-        return ro - etha * numpy.log(2 * ro) - self.__l * numpy.pi / 2 + arg_gamma(complex(self.__l + 1, etha))
-
-    def __call__(self, etha: float, ro: float) -> float:
-        return numpy.cos(self.theta(etha, ro))
-
-
-class CoulombWaveFunction:
-    def __init__(self, l: int, w: bool) -> None:
-        self.__l = l
-        self.__w = w
-
-    @property
-    def l(self) -> int:
-        return self.__l
+    def regular(self, etha: float, ro: numpy.ndarray) -> numpy.ndarray: 
+        if self.__etha != etha or (len(self.__fl) == 1 and self.__fl[0] == -999.0): 
+            self.__compute(etha, ro) 
+        return self.__fl 
+        
+    def irregular(self, etha: float, ro: numpy.ndarray) -> numpy.ndarray: 
+        if self.__etha != etha or (len(self.__gl) == 1 and self.__gl[0] == -999.0): 
+            self.__compute(etha, ro) 
+        return self.__gl 
     
-    @property
-    def w(self) -> bool:
-        return self.__w
+    def hplus(self, etha: float, ro: numpy.ndarray) -> numpy.ndarray: 
+        if self.__etha != etha or (len(self.__hlp) == 1 and self.__hlp[0] == -999.0): 
+            self.__compute(etha, ro) 
+        return self.__hlp 
+    
+    def hminus(self, etha: float, ro: numpy.ndarray) -> numpy.ndarray: 
+        if self.__etha != etha or (len(self.__hlm) == 1 and self.__hlm[0] == -999.0): 
+            self.__compute(etha, ro) 
+        return self.__hlm 
+    
+    def dregular(self, etha: float, ro: numpy.ndarray) -> numpy.ndarray: 
+        if self.__etha != etha or (len(self.__dfl) == 1 and self.__dfl[0] == -999.0): 
+            self.__compute(etha, ro) 
+        return self.__dfl 
+    
+    def dirregular(self, etha: float, ro: numpy.ndarray) -> numpy.ndarray: 
+        if self.__etha != etha or (len(self.__dgl) == 1 and self.__dgl[0] == -999.0): 
+            self.__compute(etha, ro) 
+        return self.__dgl 
+    
+    def dhplus(self, etha: float, ro: numpy.ndarray) -> numpy.ndarray: 
+        if self.__etha != etha or (len(self.__dhlp) == 1 and self.__dhlp[0] == -999.0): 
+            self.__compute(etha, ro) 
+        return self.__dhlp 
+    
+    def dhminus(self, etha: float, ro: numpy.ndarray) -> numpy.ndarray: 
+        if self.__etha != etha or (len(self.__dhlm) == 1 and self.__dhlm[0] == -999.0): 
+            self.__compute(etha, ro) 
+        return self.__dhlm
 
-    def __call__(self, etha: float, ro: float) -> numpy.ndarray:
-        return Irregular(self.__l)(etha, ro) + complex(0, 1 if self.__w else -1) * Regular(self.__l)(etha, ro)
+    def _potential(self, eta: float, ro: float) -> float:
+        return 1.0 - 2.0 * eta / ro - self.l * (self.l + 1) / ro ** 2
 
-    def derivative(self, etha: float, ro: float) -> numpy.ndarray:
-        rl = 1 + numpy.sqrt(etha ** 2 / (self.__l + 1) ** 2)
-        sl = (self.__l + 1) / ro + etha / (self.__l + 1)
-        return rl * CoulombWaveFunction(self.__l + 1, self.__w)(etha, ro) - sl * CoulombWaveFunction(self.__l, self.__w)(etha, ro)
+    def _integrate_outward(self, eta: float | complex, ro_grid: numpy.ndarray) -> numpy.ndarray:
+        h = ro_grid[1] - ro_grid[0]
+        u = numpy.zeros_like(ro_grid)
+
+        # Small-r behavior: F_l ~ ro^{l+1}
+        u[0] = ro_grid[0] ** (self.l + 1)
+        u[1] = ro_grid[1] ** (self.l + 1)
+
+        for i in range(1, len(ro_grid) - 1):
+            k_im1 = self._potential(eta, ro_grid[i - 1])
+            k_i   = self._potential(eta, ro_grid[i])
+            k_ip1 = self._potential(eta, ro_grid[i + 1])
+
+            u[i + 1] = (
+                (2 * (1 - 5 * h**2 * k_i / 12) * u[i]
+                 - (1 + h**2 * k_im1 / 12) * u[i - 1])
+                / (1 + h**2 * k_ip1 / 12)
+            )
+
+        return u
+
+    def _integrate_inward(self, eta: float | complex, ro_grid: numpy.ndarray) -> numpy.ndarray:
+        h = ro_grid[1] - ro_grid[0]
+        u = numpy.zeros_like(ro_grid)
+
+        # Asymptotic form for large ro
+        phase = ro_grid[-1] - eta * numpy.log(2 * ro_grid[-1]) - self.l * numpy.pi / 2
+        u[-1] = numpy.cos(phase)
+        u[-2] = numpy.cos(ro_grid[-2] - eta * numpy.log(2 * ro_grid[-2]) - self.l * numpy.pi / 2)
+
+        for i in range(len(ro_grid) - 2, 0, -1):
+            k_ip1 = self._potential(eta, ro_grid[i + 1])
+            k_i   = self._potential(eta, ro_grid[i])
+            k_im1 = self._potential(eta, ro_grid[i - 1])
+
+            u[i - 1] = (
+                (2 * (1 - 5 * h**2 * k_i / 12) * u[i]
+                 - (1 + h**2 * k_ip1 / 12) * u[i + 1])
+                / (1 + h**2 * k_im1 / 12)
+            )
+
+        return u
+
+    def __compute(self, eta: float, ro: numpy.ndarray) -> None:
+        ro = numpy.asarray(ro)
+        assert numpy.all(ro > 0), "ro must be positive"
+
+        F = self._integrate_outward(eta, ro)
+        G = self._integrate_inward(eta, ro)
+
+        i = len(ro) // 2
+        dF = (F[i + 1] - F[i - 1]) / (ro[i + 1] - ro[i - 1])
+        dG = (G[i + 1] - G[i - 1]) / (ro[i + 1] - ro[i - 1])
+
+        W = F[i] * dG - dF * G[i]
+        G /= W
+
+        dF = numpy.gradient(F, ro)
+        dG = numpy.gradient(G, ro)
+
+        H_plus  = F + 1j * G
+        H_minus = F - 1j * G
+
+        dH_plus  = dG + 1j * dF
+        dH_minus = dG - 1j * dF
+
+        self.__fl = F; self.__gl = G
+        self.__dfl = dF; self.__dgl = dG
+        self.__hlp = H_plus; self.__hlm = H_minus
+        self.__dhlp = dH_plus; self.__dhlm = dH_minus
 
 
 if __name__ == '__main__':

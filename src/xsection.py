@@ -5,7 +5,7 @@ from nuclear import Nuclei
 from mathematics.chi import Chi_Square
 from mathematics.numerov import Numerov
 from mathematics.legendre import Legendre
-from mathematics.couloumb import CoulombWaveFunction, arg_gamma
+from mathematics.couloumb import CoulombWaveFunctions, coulomb_phase_shift
 from potentials import Optical, WSVolume, WSSurface, WSParameters, Coulomb, SpinOrbit
 
 
@@ -174,10 +174,9 @@ class Elastic:
         '''
         rmin = 2 * l * dr if l > 0 else dr
         grid = numpy.linspace(rmin, rmax, int((rmax - rmin) / dr) + 1)
-        solutions = self.radial_solutions(l, grid)
 
-        a1, a2 = self.outward_radiuses()
-        smatrix = self.smatrix(a1, a2, l, solutions)
+        solutions = self.radial_solutions(l, grid)
+        smatrix = self.smatrix(l, solutions)
         print(smatrix)
 
         legendre = Legendre(l)
@@ -206,7 +205,7 @@ class Elastic:
         ecm = self.center_mass_energy
         potential = l * (l + 1) / (r ** 2) + 2 * mu / (h_bar ** 2 * c ** 2) * (self.potential(r) - ecm)
 
-        return Numerov(potential, r).thorlacius()
+        return Numerov(potential, r).solve()
 
     def outward_radiuses(self) -> tuple[float, float]:
         '''
@@ -217,9 +216,9 @@ class Elastic:
         `radius` : `float`
             Matching outward radius in fermi.
         '''
-        return (6.0, 6.1)
+        return (11.6, 11.7)
     
-    def smatrix(self, a1: float, a2: float, l: int, solutions: tuple[numpy.ndarray, numpy.ndarray]) -> complex:
+    def smatrix(self, l: int, solutions: tuple[numpy.ndarray, numpy.ndarray]) -> complex:
         '''
         Params
         ------
@@ -237,19 +236,23 @@ class Elastic:
         `S` : `complex`
             Scaterring matrix of certain partial wave, dimensionless.
         '''
+        k = self.wavenumber
         etha = self.sommerfield
+        a1, a2 = self.outward_radiuses()
     
         index1 = numpy.abs(solutions[0] - a1).argmin()
-        index2 = numpy.abs(solutions[1] - a2).argmin()
+        index2 = numpy.abs(solutions[0] - a2).argmin()
 
         xl1 = solutions[1][index1]
         xl2 = solutions[1][index2]
+        relation = xl1 / xl2
 
-        hminus = CoulombWaveFunction(l, False)
-        hplus = CoulombWaveFunction(l, True)
+        cf = CoulombWaveFunctions(l)
+        hplus = cf.hplus(etha, k * solutions[0])
+        hminus = cf.hminus(etha, k * solutions[0])
 
-        numerator = xl1 * hplus(etha, a2 * self.wavenumber) - xl2 * hminus(etha, a1 * self.wavenumber)
-        denumerator = xl2 * hplus(etha, a1 * self.wavenumber) - xl1 * hminus(etha, a2 * self.wavenumber)
+        numerator = relation * hminus[index2] - hminus[index1]
+        denumerator = relation * hplus[index2] - hplus[index1]
 
         smatrix = numerator / denumerator
 
@@ -268,7 +271,7 @@ class Elastic:
             Coulomb scattering amplitude, (mb/sr)^(1/2)
         '''
         const = - self.sommerfield / (2 * self.wavenumber * numpy.sin(numpy.radians(thetas / 2)) ** 2)
-        exp = -1j * self.sommerfield * numpy.log(numpy.sin(numpy.radians(thetas / 2)) ** 2) + 2j * arg_gamma(1 + 1j * self.sommerfield)
+        exp = -1j * self.sommerfield * numpy.log(numpy.sin(numpy.radians(thetas / 2)) ** 2) + 2j * coulomb_phase_shift(0, 1 + 1j * self.sommerfield)
 
         return const * numpy.exp(exp)
 
@@ -314,7 +317,7 @@ if __name__ == '__main__':
     axes[0].grid()
 
     elastic = Elastic(opt, E_lab)
-    angles, cross = elastic.xsections(10, 180, 0.5, lmax=-1)
+    angles, cross = elastic.xsections(10, 180, 0.5, lmax=20)
 
     # exp_ang, exp_xs = [], []
     # with open('src/exp.txt', 'r') as file:
